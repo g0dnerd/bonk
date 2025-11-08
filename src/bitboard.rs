@@ -2,7 +2,7 @@ use std::ops::*;
 
 use crate::Square;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Bitboard(pub u64);
 
 macro_rules! bb_impl_math_ops {

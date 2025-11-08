@@ -172,6 +172,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                 if castling_rights & Castling::WHITE_KINGSIDE != 0
                     && state.is_square_empty(Squares::F1)
                     && state.is_square_empty(Squares::G1)
+                    && state.pieces_for_color(&Color::WHITE).contains(Squares::H1)
+                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::H1)
                 {
                     moves |= Squares::G1;
                 }
@@ -179,6 +181,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                     && state.is_square_empty(Squares::B1)
                     && state.is_square_empty(Squares::C1)
                     && state.is_square_empty(Squares::D1)
+                    && state.pieces_for_color(&Color::WHITE).contains(Squares::A1)
+                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::A1)
                 {
                     moves |= Squares::C1;
                 }
@@ -187,12 +191,18 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                 if castling_rights & Castling::BLACK_KINGSIDE != 0
                     && state.is_square_empty(Squares::F8)
                     && state.is_square_empty(Squares::G8)
+                    && !state.is_square_empty(Squares::H8)
+                    && state.pieces_for_color(&Color::BLACK).contains(Squares::H8)
+                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::H8)
                 {
                     moves |= Squares::G8;
                 }
                 if castling_rights & Castling::BLACK_QUEENSIDE != 0
+                    && state.is_square_empty(Squares::B8)
                     && state.is_square_empty(Squares::C8)
                     && state.is_square_empty(Squares::D8)
+                    && state.pieces_for_color(&Color::BLACK).contains(Squares::A8)
+                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::A8)
                 {
                     moves |= Squares::C8;
                 }
@@ -200,7 +210,20 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
         }
     }
 
-    moves
+    let mut opp_king_mask = state.piece_bitboard(&Piece::KING) & state.pieces_for_color(&!c);
+    let opp_king_square = opp_king_mask.trailing_zeros();
+    for (dx, dy) in ROOK_DIRECTIONS {
+        if let Some(offs) = try_square_offset(opp_king_square, dx, dy) {
+            opp_king_mask |= offs;
+        }
+    }
+    for (dx, dy) in BISHOP_DIRECTIONS {
+        if let Some(offs) = try_square_offset(opp_king_square, dx, dy) {
+            opp_king_mask |= offs;
+        }
+    }
+
+    moves & !opp_king_mask
 }
 
 pub fn blockers_from_position(state: &GameState, s: Square, p: &Piece) -> Bitboard {
@@ -260,6 +283,10 @@ pub fn legal_moves(state: &GameState, c: &Color) -> Vec<Move> {
         for end in piece_moves {
             let mut tmp_state = *state;
             let candidate_move = Move { start: s, end };
+
+            if end > 63 {
+                eprintln!("Out of bounds move for {p:?}: {s:?} to {end:?}");
+            }
             tmp_state.make_move(&candidate_move, c, &p);
 
             match &tmp_state.in_check() {

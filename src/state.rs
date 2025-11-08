@@ -1,8 +1,9 @@
 use crate::{
     Castling, CastlingRights, Color, DEFAULT_ATTACKED_BY, DEFAULT_ATTACKS, Move, PIECE_REPR, Piece,
-    Square, Squares,
+    Square, Squares, ZOBRIST_KEYS,
     bitboard::Bitboard,
     movegen::{pawn_attacks, pseudolegal_for_piece},
+    util::square_to_algebraic,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,11 +294,11 @@ impl GameState {
                 },
                 FenState::EnPassant => match c {
                     '-' => (),
-                    'a'..='h' => en_passant_file = Some(97 - c as u8),
+                    'a'..='h' => en_passant_file = Some((c as u8) - b'a'),
                     '0'..='8' => {
                         if let Some(f) = en_passant_file {
                             let rank = c.to_digit(10).unwrap() as u8;
-                            let ep: Square = (7 - f) * 8 + rank;
+                            let ep: Square = rank * 8 + f;
                             if ep > 63 {
                                 return Err("Invalid en passant square in FEN".into());
                             }
@@ -413,6 +414,8 @@ impl GameState {
         let piece_to_capture = self.piece_at(end);
         let mut en_passant_target: Option<Square> = None;
 
+        self.halfmove_clock += 1;
+
         // Update en passant & castling
         match p {
             Piece::PAWN => {
@@ -454,36 +457,36 @@ impl GameState {
                 if start.abs_diff(end) == 2 {
                     match end {
                         Squares::G1 => {
-                            unblocked_sliders |= Squares::F1;
                             unblocked_sliders ^= Squares::H1;
+                            unblocked_sliders |= Squares::F1;
                             self.pieces[Piece::ROOK as usize] ^= Squares::H1;
                             self.pieces[Piece::ROOK as usize] |= Squares::F1;
-                            self.colors[*c as usize] |= Squares::F1;
                             self.colors[*c as usize] ^= Squares::H1;
+                            self.colors[*c as usize] |= Squares::F1;
                         }
                         Squares::C1 => {
-                            unblocked_sliders |= Squares::D1;
                             unblocked_sliders ^= Squares::A1;
+                            unblocked_sliders |= Squares::D1;
                             self.pieces[Piece::ROOK as usize] ^= Squares::A1;
                             self.pieces[Piece::ROOK as usize] |= Squares::D1;
-                            self.colors[*c as usize] |= Squares::D1;
                             self.colors[*c as usize] ^= Squares::A1;
+                            self.colors[*c as usize] |= Squares::D1;
                         }
                         Squares::G8 => {
-                            unblocked_sliders |= Squares::F8;
                             unblocked_sliders ^= Squares::H8;
+                            unblocked_sliders |= Squares::F8;
                             self.pieces[Piece::ROOK as usize] ^= Squares::H8;
                             self.pieces[Piece::ROOK as usize] |= Squares::F8;
-                            self.colors[*c as usize] |= Squares::F8;
                             self.colors[*c as usize] ^= Squares::H8;
+                            self.colors[*c as usize] |= Squares::F8;
                         }
                         Squares::C8 => {
-                            unblocked_sliders |= Squares::D8;
                             unblocked_sliders ^= Squares::A8;
+                            unblocked_sliders |= Squares::D8;
                             self.pieces[Piece::ROOK as usize] ^= Squares::A8;
                             self.pieces[Piece::ROOK as usize] |= Squares::D8;
-                            self.colors[*c as usize] |= Squares::D8;
                             self.colors[*c as usize] ^= Squares::A8;
+                            self.colors[*c as usize] |= Squares::D8;
                         }
                         _ => unreachable!(),
                     }
@@ -505,13 +508,23 @@ impl GameState {
         }
 
         if let Some(x) = piece_to_capture {
+            self.halfmove_clock = 0;
             self.pieces[x as usize] ^= end;
             self.colors[!c as usize] ^= end;
+            for s in self.outgoing_attacks_by_square(end) {
+                self.incoming_attacks[s as usize] ^= end;
+            }
+            self.outgoing_attacks[end as usize] = Bitboard(0);
         }
 
         if let Some(t) = en_passant_target {
+            self.halfmove_clock = 0;
             self.pieces[Piece::PAWN as usize] ^= t;
             self.colors[!c as usize] ^= t;
+            for s in self.outgoing_attacks_by_square(t) {
+                self.incoming_attacks[s as usize] ^= t;
+            }
+            self.outgoing_attacks[t as usize] = Bitboard(0);
         }
 
         // Actually move the piece
@@ -534,26 +547,31 @@ impl GameState {
         }
 
         // eprintln!("Updating attacks for unblocked slider {unblocked_sliders:?}\n{self}");
-        for s in unblocked_sliders {
-            self.update_attacks(s);
-        }
 
-        let incoming_atx_new = self.incoming_attacks(end);
-        let blocked_sliders = incoming_atx_new & self.all_sliders() & !Bitboard::from_square(end);
+        // All pieces that attack the target square
+        let atx_on_dest = self.incoming_attacks(end);
+        // All sliders that attack the target square are now blocked
+        let blocked_sliders = (atx_on_dest & self.all_sliders()) & !Bitboard::from_square(end);
         let mut squares_to_recalculate = Bitboard(0);
+
+        // For each square a newly blocked slider was attacking, we have to recalculate
         for s in blocked_sliders {
             squares_to_recalculate |= self.outgoing_attacks_by_square(s);
         }
 
+        for s in unblocked_sliders {
+            self.update_attacks(s);
+        }
+
+        for s in squares_to_recalculate {
+            self.incoming_attacks[s as usize] &= !blocked_sliders;
+        }
+
         for s in blocked_sliders {
             self.update_attacks(s);
         }
-        for s in squares_to_recalculate {
-            self.recalculate_incoming_attacks(s);
-        }
 
         self.update_attacks(end);
-        self.halfmove_clock += 1;
 
         if self.to_move == Color::BLACK {
             self.fullmove_clock += 1;
@@ -564,15 +582,31 @@ impl GameState {
         let inactive_pieces = self.pieces_for_color(&!c);
         let active_king_mask = king_mask & active_pieces;
         let inactive_king_mask = king_mask & inactive_pieces;
-        let other_king_atx =
-            self.incoming_attacks(inactive_king_mask.trailing_zeros()) & active_pieces;
-        let own_king_atx =
-            self.incoming_attacks(active_king_mask.trailing_zeros()) & inactive_pieces;
+        let other_king_square = inactive_king_mask.trailing_zeros();
+        let own_king_square = active_king_mask.trailing_zeros();
 
-        if !other_king_atx.is_empty() {
-            self.in_check = Some(!c);
-        } else if !own_king_atx.is_empty() {
+        if other_king_square > 63 {
+            eprintln!(
+                "Out of bounds opposing king square while evaluating move for {c:?} from {} to {}",
+                square_to_algebraic(start),
+                square_to_algebraic(end)
+            );
+        }
+
+        if own_king_square > 63 {
+            eprintln!(
+                "Out of bounds own king square while evaluating move for {c:?} from {} to {}",
+                square_to_algebraic(start),
+                square_to_algebraic(end)
+            );
+        }
+        let other_king_atx = self.incoming_attacks(other_king_square) & active_pieces;
+        let own_king_atx = self.incoming_attacks(own_king_square) & inactive_pieces;
+
+        if !own_king_atx.is_empty() {
             self.in_check = Some(*c);
+        } else if !other_king_atx.is_empty() {
+            self.in_check = Some(!c);
         } else {
             self.in_check = None;
         }
@@ -581,8 +615,12 @@ impl GameState {
     }
 
     fn update_attacks(&mut self, s: Square) {
-        let p = self.piece_at(s).unwrap();
-        let c = self.color_at(s).unwrap();
+        let p = self
+            .piece_at(s)
+            .unwrap_or_else(|| panic!("Expected a piece at {s:?} in state\n{self}"));
+        let c = self
+            .color_at(s)
+            .unwrap_or_else(|| panic!("Expected a color at {s:?} in state\n{self}"));
         let moves = if p != Piece::PAWN {
             pseudolegal_for_piece(self, s, &c, &p)
         } else {
@@ -605,6 +643,15 @@ impl GameState {
             }
         }
         self.incoming_attacks[s as usize] = attackers;
+    }
+
+    pub fn hash(&self) -> u64 {
+        let mut hash = 0;
+        for s in self.all_pieces() {
+            let p = self.piece_at(s).unwrap();
+            hash ^= ZOBRIST_KEYS[p as usize][s as usize];
+        }
+        hash
     }
 }
 
@@ -851,5 +898,402 @@ mod test {
             state.piece_bitboard(&Piece::QUEEN),
             Bitboard(0x4800000000000008)
         );
+    }
+
+    #[test]
+    fn fen_attacks_pawn_outgoing() {
+        let fen = "k7/8/8/3p4/8/8/3P4/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // White pawn on d2
+        let white_pawn_attacks = state.outgoing_attacks_by_square(Squares::D2);
+        assert_eq!(white_pawn_attacks, Bitboard(0x140000)); // c3 and e3
+
+        // Black pawn on d5
+        let black_pawn_attacks = state.outgoing_attacks_by_square(Squares::D5);
+        assert_eq!(black_pawn_attacks, Bitboard(0x14000000)); // c4 and e4
+    }
+
+    #[test]
+    fn fen_attacks_pawn_incoming() {
+        let fen = "k7/8/8/3p4/8/8/3P4/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // c3 should be attacked by white pawn on d2
+        let c3_incoming = state.incoming_attacks(Squares::C3);
+        assert!(c3_incoming.contains(Squares::D2));
+
+        // e3 should be attacked by white pawn on d2
+        let e3_incoming = state.incoming_attacks(Squares::E3);
+        assert!(e3_incoming.contains(Squares::D2));
+
+        // c4 should be attacked by black pawn on d5
+        let c4_incoming = state.incoming_attacks(Squares::C4);
+        assert!(c4_incoming.contains(Squares::D5));
+
+        // e4 should be attacked by black pawn on d5
+        let e4_incoming = state.incoming_attacks(Squares::E4);
+        assert!(e4_incoming.contains(Squares::D5));
+    }
+
+    #[test]
+    fn fen_attacks_knight_outgoing() {
+        // Knights in various positions
+        let fen = "k6K/8/8/8/3N4/8/8/N6n w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // Knight on d4 (center)
+        let d4_attacks = state.outgoing_attacks_by_square(Squares::D4);
+        let expected = Bitboard(0x142200221400);
+        assert_eq!(d4_attacks, expected);
+
+        // Knight on a1 (corner)
+        let a1_attacks = state.outgoing_attacks_by_square(Squares::A1);
+        let expected = Bitboard(0x20400);
+        assert_eq!(a1_attacks, expected);
+
+        // Knight on h1 (corner)
+        let h1_attacks = state.outgoing_attacks_by_square(Squares::H1);
+        let expected = Bitboard(0x402000);
+        assert_eq!(h1_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_knight_incoming() {
+        let fen = "k7/8/8/8/3N4/8/8/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // All squares attacked by knight on d4
+        let knight_targets = [
+            Squares::B3,
+            Squares::C2,
+            Squares::E2,
+            Squares::F3,
+            Squares::F5,
+            Squares::E6,
+            Squares::C6,
+            Squares::B5,
+        ];
+
+        for target in knight_targets {
+            let incoming = state.incoming_attacks(target);
+            assert!(
+                incoming.contains(Squares::D4),
+                "Square {} should be attacked by knight on d4",
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn fen_attacks_bishop_outgoing_unblocked() {
+        // Bishop with clear diagonals
+        let fen = "k7/8/8/8/3B4/8/8/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let bishop_attacks = state.outgoing_attacks_by_square(Squares::D4);
+        let expected = Bitboard(0x8041221400142241);
+        assert_eq!(bishop_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_bishop_outgoing_blocked() {
+        // Bishop blocked by friendly pieces
+        let fen = "k7/8/8/1P3P2/8/1P1B1P2/8/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let bishop_attacks = state.outgoing_attacks_by_square(Squares::D3);
+        // Should attack to b2, f2, b6, f6 but not beyond
+        let expected = Bitboard(0x2214001422);
+        assert_eq!(bishop_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_rook_outgoing_unblocked() {
+        // Rook with clear lines
+        let fen = "k7/8/8/8/3R4/8/8/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let rook_attacks = state.outgoing_attacks_by_square(Squares::D4);
+        let expected = Bitboard(0x8080808f7080808);
+        assert_eq!(rook_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_rook_outgoing_blocked() {
+        // Rook blocked by friendly pieces
+        let fen = "k7/8/3P4/8/P2R3P/8/3P4/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let rook_attacks = state.outgoing_attacks_by_square(Squares::D4);
+        // Should attack a4, b4, c4, e4, f4, g4, h4, d2, d3, d5, d6
+        let expected = Bitboard(0x808f7080800);
+        assert_eq!(rook_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_queen_outgoing() {
+        // Queen should combine rook and bishop moves
+        let fen = "k7/8/8/8/3Q4/8/8/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let queen_attacks = state.outgoing_attacks_by_square(Squares::D4);
+
+        // Should be combination of rook and bishop from d4
+        let rook_pattern = Bitboard(0x8080808f7080808);
+        let bishop_pattern = Bitboard(0x8041221400142241);
+        let expected = rook_pattern | bishop_pattern;
+
+        assert_eq!(queen_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_king_outgoing() {
+        // King attacks all adjacent squares
+        let fen = "8/8/8/8/3K4/8/8/8 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let king_attacks = state.outgoing_attacks_by_square(Squares::D4);
+        let expected = Bitboard(0x1c141c0000);
+        assert_eq!(king_attacks, expected);
+
+        // King in corner
+        let fen = "8/8/8/8/8/8/8/K7 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let king_attacks = state.outgoing_attacks_by_square(Squares::A1);
+        let expected = Bitboard(0x302);
+        assert_eq!(king_attacks, expected);
+    }
+
+    #[test]
+    fn fen_attacks_complex_position_incoming() {
+        // Test that incoming attacks are correctly calculated for complex position
+        let fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2BP4/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // e5 should be attacked by multiple pieces
+        let e5_incoming = state.incoming_attacks(Squares::E5);
+
+        // Should be attacked by: d4 pawn, f3 knight, potentially d8 queen
+        assert!(
+            e5_incoming.contains(Squares::D4),
+            "e5 should be attacked by d4 pawn"
+        );
+        assert!(
+            e5_incoming.contains(Squares::F3),
+            "e5 should be attacked by f3 knight"
+        );
+
+        // f7 should be attacked by bishop on c4
+        let f7_incoming = state.incoming_attacks(Squares::F7);
+        assert!(
+            f7_incoming.contains(Squares::C4),
+            "f7 should be attacked by c4 bishop"
+        );
+    }
+
+    #[test]
+    fn fen_attacks_pinned_pieces() {
+        // Test that pinned pieces still generate attacks (they do in chess)
+        let fen = "4k3/8/8/8/4r3/8/4R3/4K3 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // White rook on e2 is pinned but still attacks along its rank
+        let e2_attacks = state.outgoing_attacks_by_square(Squares::E2);
+
+        // Should attack e1, e3, e4 (blocked by enemy rook), and a2-d2, f2-h2
+        assert!(e2_attacks.contains(Squares::E1));
+        assert!(e2_attacks.contains(Squares::E3));
+        assert!(e2_attacks.contains(Squares::E4)); // Can attack the pinning piece
+        assert!(e2_attacks.contains(Squares::D2));
+        assert!(e2_attacks.contains(Squares::F2));
+    }
+
+    #[test]
+    fn fen_attacks_blocked_by_enemy() {
+        // Sliders should attack enemy piece but not beyond
+        let fen = "k7/8/8/3r4/8/8/3R4/7K w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        let d2_attacks = state.outgoing_attacks_by_square(Squares::D2);
+
+        // Should attack up to and including d5, but not d6-d8
+        assert!(d2_attacks.contains(Squares::D3));
+        assert!(d2_attacks.contains(Squares::D4));
+        assert!(d2_attacks.contains(Squares::D5)); // Enemy rook
+        assert!(!d2_attacks.contains(Squares::D6));
+        assert!(!d2_attacks.contains(Squares::D7));
+        assert!(!d2_attacks.contains(Squares::D8));
+    }
+
+    #[test]
+    fn fen_attacks_all_pieces_consistency() {
+        // Verify that for every outgoing attack, there's a corresponding incoming attack
+        let fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        for from_square in 0..64 {
+            if state.is_square_empty(from_square) {
+                continue;
+            }
+
+            let outgoing = state.outgoing_attacks_by_square(from_square);
+
+            for to_square in outgoing {
+                let incoming = state.incoming_attacks(to_square);
+                assert!(
+                    incoming.contains(from_square),
+                    "Inconsistency: {} attacks {} but {} doesn't list {} as attacker",
+                    from_square,
+                    to_square,
+                    to_square,
+                    from_square
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fen_attacks_no_self_attacks() {
+        // Verify no piece attacks its own square
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        for square in 0..64 {
+            if state.is_square_empty(square) {
+                continue;
+            }
+
+            let outgoing = state.outgoing_attacks_by_square(square);
+            assert!(
+                !outgoing.contains(square),
+                "Piece on {} attacks itself",
+                square
+            );
+        }
+    }
+
+    #[test]
+    fn fen_attacks_empty_squares() {
+        // Empty squares should have no outgoing attacks
+        let fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        for square in 0..64 {
+            if state.is_square_empty(square) {
+                let outgoing = state.outgoing_attacks_by_square(square);
+                assert!(
+                    outgoing.is_empty(),
+                    "Empty square {} has outgoing attacks: {:?}",
+                    square,
+                    outgoing
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fen_attacks_symmetry() {
+        // Test that white and black pieces in symmetric positions have symmetric attacks
+        let fen = "4k3/4p3/8/8/8/8/4P3/4K3 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // White king on e1
+        let white_king_attacks = state.outgoing_attacks_by_square(Squares::E1);
+        // Black king on e8
+        let black_king_attacks = state.outgoing_attacks_by_square(Squares::E8);
+
+        // Should be symmetric (colorflipped)
+        assert_eq!(white_king_attacks.colorflip(), black_king_attacks);
+
+        // White pawn on e2
+        let white_pawn_attacks = state.outgoing_attacks_by_square(Squares::E2);
+        // Black pawn on e7
+        let black_pawn_attacks = state.outgoing_attacks_by_square(Squares::E7);
+
+        // Pawn attacks should be symmetric
+        assert_eq!(white_pawn_attacks.colorflip(), black_pawn_attacks);
+    }
+
+    #[test]
+    fn fen_attacks_starting_position() {
+        // Comprehensive check of starting position
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // Knights should attack their squares
+        let b1_knight = state.outgoing_attacks_by_square(Squares::B1);
+        assert!(b1_knight.contains(Squares::A3));
+        assert!(b1_knight.contains(Squares::C3));
+        assert!(b1_knight.contains(Squares::D2));
+
+        // Pawns attack diagonals
+        let e2_pawn = state.outgoing_attacks_by_square(Squares::E2);
+        assert!(e2_pawn.contains(Squares::D3));
+        assert!(e2_pawn.contains(Squares::F3));
+        assert!(!e2_pawn.contains(Squares::E3)); // Pawns don't attack forward
+
+        let c1_bishop = state.outgoing_attacks_by_square(Squares::C1);
+        assert!(c1_bishop.contains(Squares::B2));
+        assert!(c1_bishop.contains(Squares::D2));
+
+        let a1_rook = state.outgoing_attacks_by_square(Squares::A1);
+        assert!(a1_rook.contains(Squares::A2));
+        assert!(a1_rook.contains(Squares::B1));
+
+        let d1_queen = state.outgoing_attacks_by_square(Squares::D1);
+        assert!(d1_queen.contains(Squares::C1));
+        assert!(d1_queen.contains(Squares::E1));
+        assert!(d1_queen.contains(Squares::C2));
+        assert!(d1_queen.contains(Squares::D2));
+        assert!(d1_queen.contains(Squares::E2));
+
+        let e1_king = state.outgoing_attacks_by_square(Squares::E1);
+        assert!(e1_king.contains(Squares::D1));
+        assert!(e1_king.contains(Squares::F1));
+        assert!(e1_king.contains(Squares::D2));
+        assert!(e1_king.contains(Squares::E2));
+        assert!(e1_king.contains(Squares::F2));
+    }
+
+    #[test]
+    fn fen_attacks_open_position() {
+        // Position with lots of open lines
+        let fen = "2k5/8/8/3Q4/8/8/8/2K5 w - - 0 1";
+        let state = GameState::from_fen(fen.into()).unwrap();
+
+        // Queen on d5 should have maximum mobility
+        let queen_attacks = state.outgoing_attacks_by_square(Squares::D5);
+
+        // Should attack entire d-file (except d5)
+        for rank in 0..8 {
+            let square = rank * 8 + 3; // d-file
+            if square != Squares::D5 {
+                assert!(
+                    queen_attacks.contains(square),
+                    "Queen should attack square {} on d-file",
+                    square
+                );
+            }
+        }
+
+        // Should attack entire 5th rank (except d5)
+        for file in 0..8 {
+            let square = 4 * 8 + file; // 5th rank
+            if square != Squares::D5 {
+                assert!(
+                    queen_attacks.contains(square),
+                    "Queen should attack square {} on 5th rank",
+                    square
+                );
+            }
+        }
+
+        // Should attack diagonals
+        assert!(queen_attacks.contains(Squares::A2));
+        assert!(queen_attacks.contains(Squares::H1));
+        assert!(queen_attacks.contains(Squares::A8));
+        assert!(queen_attacks.contains(Squares::G8));
     }
 }

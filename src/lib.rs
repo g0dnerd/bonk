@@ -1,8 +1,12 @@
+use once_cell::sync::Lazy;
+use rand::{RngCore, rng};
+
 use crate::bitboard::Bitboard;
 
 pub mod bitboard;
 pub mod evaluation;
 pub mod movegen;
+pub mod search;
 pub mod state;
 
 pub type Square = u8;
@@ -19,7 +23,7 @@ pub const PIECE_REPR: [[&str; 6]; 2] = [
     ["p", "n", "b", "r", "q", "k"],
 ];
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Color {
     WHITE = 0,
     BLACK = 1,
@@ -68,8 +72,8 @@ pub enum Piece {
 }
 
 impl Piece {
-    pub fn from_usize(value: usize) -> Self {
-        match value {
+    pub fn from_usize(value: impl Into<usize>) -> Self {
+        match value.into() {
             0 => Self::PAWN,
             1 => Self::KNIGHT,
             2 => Self::BISHOP,
@@ -177,6 +181,21 @@ impl Squares {
     pub const G8: Square = 62;
     pub const H8: Square = 63;
 }
+
+pub static ZOBRIST_KEYS: Lazy<[[u64; 64]; 6]> = Lazy::new(|| {
+    let mut r = rng();
+    let mut keys = [[0; 64]; 6];
+    let mut dupe_keys = Vec::new();
+    (0..6).for_each(|piece_type| {
+        for square in 0..64 {
+            let key = r.next_u64();
+            assert!(!dupe_keys.contains(&key));
+            dupe_keys.push(key);
+            keys[piece_type][square] = key;
+        }
+    });
+    keys
+});
 
 pub type SliderDirections = [(i8, i8); 4];
 
@@ -324,7 +343,14 @@ pub const DEFAULT_ATTACKED_BY: [Bitboard; 64] = [
     Bitboard(0),
 ];
 
-mod util {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameResult {
+    Checkmate(Color), // Winner
+    Stalemate,
+    FiftyMoveRule,
+}
+
+pub mod util {
     #[allow(unused_macros)]
     macro_rules! mk_mv {
         ($state:expr, $s:ident, $e:ident, W, $piece:tt) => {
@@ -373,6 +399,12 @@ mod util {
                 end: Squares::$e,
             }
         };
+    }
+
+    pub fn square_to_algebraic(square: u8) -> String {
+        let file = (b'a' + (square % 8)) as char;
+        let rank = (b'1' + (square / 8)) as char;
+        format!("{}{}", file, rank)
     }
 
     #[allow(unused_imports)]
