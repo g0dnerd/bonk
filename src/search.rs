@@ -104,7 +104,7 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
     // Order moves for better search
     order_moves(state, &mut moves, state.to_move());
 
-    for m in &moves {
+    for &m in &moves {
         let p = state.piece_at(m.start).unwrap();
         let mut new_state = *state;
         new_state.make_move(m, to_move, p);
@@ -113,16 +113,16 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
         if let Some(r) = is_game_over(&new_state)
             && r == GameResult::Checkmate(!new_state.to_move())
         {
-            return Some((*m, CHECKMATE_SCORE));
+            return Some((m, CHECKMATE_SCORE));
         }
     }
 
     let results: Vec<(Move, f32)> = moves
         .par_iter()
-        .map(|m| {
+        .map(|&m| {
             let p = state.piece_at(m.start).unwrap();
             let mut new_state = *state;
-            new_state.make_move(m, to_move, &p);
+            new_state.make_move(m, to_move, p);
 
             let score = -negamax(
                 &new_state,
@@ -132,7 +132,7 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
                 &tbl,
             );
 
-            (*m, score)
+            (m, score)
         })
         .collect();
 
