@@ -1,5 +1,8 @@
 use core::f32;
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use dashmap::DashMap;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     GameResult, Move, Piece,
@@ -15,7 +18,7 @@ pub fn negamax(
     depth: u8,
     mut alpha: f32,
     mut beta: f32,
-    tbl: &mut TranspositionTable,
+    tbl: &TranspositionTable,
 ) -> f32 {
     let hash = state.hash();
 
@@ -89,7 +92,7 @@ pub fn negamax(
 }
 
 pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
-    let mut tbl = TranspositionTable::default();
+    let tbl = TranspositionTable::default();
 
     let to_move = state.to_move();
     let mut moves = legal_moves(state, to_move);
@@ -101,10 +104,7 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
     // Order moves for better search
     order_moves(state, &mut moves, state.to_move());
 
-    let mut best_move = moves[0];
-    let mut best_score = f32::NEG_INFINITY;
-
-    for m in moves {
+    for m in &moves {
         let p = state.piece_at(m.start).unwrap();
         let mut new_state = *state;
         new_state.make_move(m, to_move, p);
@@ -113,26 +113,34 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
         if let Some(r) = is_game_over(&new_state)
             && r == GameResult::Checkmate(!new_state.to_move())
         {
-            best_score = CHECKMATE_SCORE;
-            best_move = m;
-            break;
-        }
-
-        let score = -negamax(
-            &new_state,
-            depth - 1,
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-            &mut tbl,
-        );
-
-        if score > best_score {
-            best_score = score;
-            best_move = m;
+            return Some((*m, CHECKMATE_SCORE));
         }
     }
 
-    Some((best_move, best_score))
+    let results: Vec<(Move, f32)> = moves
+        .par_iter()
+        .map(|m| {
+            let p = state.piece_at(m.start).unwrap();
+            let mut new_state = *state;
+            new_state.make_move(m, to_move, &p);
+
+            let score = -negamax(
+                &new_state,
+                depth - 1,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                &tbl,
+            );
+
+            (*m, score)
+        })
+        .collect();
+
+    results.into_iter().max_by(|(_, score_a), (_, score_b)| {
+        score_a
+            .partial_cmp(score_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
 }
 
 pub fn is_game_over(state: &GameState) -> Option<GameResult> {
@@ -172,21 +180,33 @@ pub struct TranspositionEntry {
 
 #[derive(Debug, Default)]
 pub struct TranspositionTable {
-    table: HashMap<u64, TranspositionEntry>,
+    table: DashMap<u64, TranspositionEntry>,
+    hits: AtomicU32,
+    misses: AtomicU32,
 }
 
 impl TranspositionTable {
     pub fn get_entry(&self, hash: u64) -> Option<TranspositionEntry> {
-        self.table.get(&hash).copied()
+        match self.table.get(&hash) {
+            Some(entry) => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                Some(*entry)
+            }
+            None => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
     }
 
-    pub fn store_entry(&mut self, hash: u64, entry: TranspositionEntry) {
-        if let Some(old_entry) = self.table.get(&hash)
+    pub fn store_entry(&self, hash: u64, entry: TranspositionEntry) {
+        if let Some(mut old_entry) = self.table.get_mut(&hash)
             && entry.depth <= old_entry.depth
         {
-            return;
+            *old_entry = entry;
+        } else {
+            self.table.insert(hash, entry);
         }
-        self.table.insert(hash, entry);
     }
 }
 
