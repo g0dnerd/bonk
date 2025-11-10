@@ -408,9 +408,7 @@ impl GameState {
             incoming_atx_prev & self.all_sliders() & !Bitboard::from_square(start)
         };
 
-        self.en_passant = None;
         let mut is_promotion = false;
-        // TODO: En passant captures
         let piece_to_capture = self.piece_at(end);
         let mut en_passant_target: Option<Square> = None;
 
@@ -420,30 +418,33 @@ impl GameState {
         match p {
             Piece::PAWN => {
                 self.halfmove_clock = 0;
-                let target_rank = end / 8;
-                let delta = end.abs_diff(start);
+                let start_rank = start / 8;
+                let end_rank = end / 8;
                 match c {
                     Color::WHITE => {
-                        match delta {
-                            16 => self.en_passant = Some(start + 8),
-                            15 | 17 => en_passant_target = Some(start + 8),
-                            _ => (),
-                        }
-
-                        // Auto-promote to queen
-                        if target_rank == 7 {
-                            is_promotion = true;
+                        if start_rank == 1 && end_rank == 3 {
+                            self.en_passant = Some(end - 8);
+                        } else if self.en_passant == Some(end) {
+                            self.en_passant = None;
+                            en_passant_target = Some(end - 8);
+                        } else {
+                            self.en_passant = None;
+                            if end_rank == 7 {
+                                is_promotion = true;
+                            }
                         }
                     }
                     Color::BLACK => {
-                        match delta {
-                            16 => self.en_passant = Some(start - 8),
-                            15 | 17 => en_passant_target = Some(start - 8),
-                            _ => (),
-                        }
-                        // Auto-promote to queen
-                        if target_rank == 0 {
-                            is_promotion = true;
+                        if start_rank == 6 && end_rank == 4 {
+                            self.en_passant = Some(end + 8);
+                        } else if self.en_passant == Some(end) {
+                            self.en_passant = None;
+                            en_passant_target = Some(end + 8);
+                        } else {
+                            self.en_passant = None;
+                            if end_rank == 0 {
+                                is_promotion = true;
+                            }
                         }
                     }
                 }
@@ -491,20 +492,24 @@ impl GameState {
                         _ => unreachable!(),
                     }
                 }
+                self.en_passant = None;
             }
-            Piece::ROOK => match c {
-                Color::WHITE => match start {
-                    Squares::A1 => self.castling_rights &= !Castling::WHITE_QUEENSIDE,
-                    Squares::H1 => self.castling_rights &= !Castling::WHITE_KINGSIDE,
-                    _ => (),
-                },
-                Color::BLACK => match start {
-                    Squares::A8 => self.castling_rights &= !Castling::BLACK_QUEENSIDE,
-                    Squares::H8 => self.castling_rights &= !Castling::BLACK_KINGSIDE,
-                    _ => (),
-                },
-            },
-            _ => (),
+            Piece::ROOK => {
+                match c {
+                    Color::WHITE => match start {
+                        Squares::A1 => self.castling_rights &= !Castling::WHITE_QUEENSIDE,
+                        Squares::H1 => self.castling_rights &= !Castling::WHITE_KINGSIDE,
+                        _ => (),
+                    },
+                    Color::BLACK => match start {
+                        Squares::A8 => self.castling_rights &= !Castling::BLACK_QUEENSIDE,
+                        Squares::H8 => self.castling_rights &= !Castling::BLACK_KINGSIDE,
+                        _ => (),
+                    },
+                }
+                self.en_passant = None;
+            }
+            _ => self.en_passant = None,
         }
 
         if let Some(x) = piece_to_capture {
@@ -552,26 +557,22 @@ impl GameState {
         let atx_on_dest = self.incoming_attacks(end);
         // All sliders that attack the target square are now blocked
         let blocked_sliders = (atx_on_dest & self.all_sliders()) & !Bitboard::from_square(end);
-        let mut squares_to_recalculate = Bitboard(0);
+        let mut attacked_by_blocked_slider = Bitboard(0);
 
         // For each square a newly blocked slider was attacking, we have to recalculate
         for s in blocked_sliders {
-            squares_to_recalculate |= self.outgoing_attacks_by_square(s);
+            attacked_by_blocked_slider |= self.outgoing_attacks_by_square(s);
         }
 
-        for s in unblocked_sliders {
-            self.update_attacks(s);
-        }
+        let attacks_to_update = (blocked_sliders | unblocked_sliders) | end;
 
-        for s in squares_to_recalculate {
+        for s in attacked_by_blocked_slider {
             self.incoming_attacks[s as usize] &= !blocked_sliders;
         }
 
-        for s in blocked_sliders {
+        for s in attacks_to_update {
             self.update_attacks(s);
         }
-
-        self.update_attacks(end);
 
         if self.to_move == Color::BLACK {
             self.fullmove_clock += 1;
@@ -615,12 +616,14 @@ impl GameState {
     }
 
     fn update_attacks(&mut self, s: Square) {
-        let p = self
-            .piece_at(s)
-            .unwrap_or_else(|| panic!("Expected a piece at {s:?} in state\n{self}"));
-        let c = self
-            .color_at(s)
-            .unwrap_or_else(|| panic!("Expected a color at {s:?} in state\n{self}"));
+        // let p = self
+        //     .piece_at(s)
+        //     .unwrap_or_else(|| panic!("Expected a piece at {s:?} in state\n{self}"));
+        // let c = self
+        //     .color_at(s)
+        //     .unwrap_or_else(|| panic!("Expected a color at {s:?} in state\n{self}"));
+        let p = self.piece_at(s).unwrap();
+        let c = self.color_at(s).unwrap();
         let moves = if p != Piece::PAWN {
             pseudolegal_for_piece(self, s, &c, &p)
         } else {
@@ -661,7 +664,7 @@ impl std::fmt::Display for GameState {
             for file in 0..8 {
                 let s = rank * 8 + file;
                 if let Some(p) = self.piece_at(s) {
-                    let c = self.color_at(s).unwrap();
+                    let c = self.color_at(s).unwrap_or(Color::WHITE);
                     write!(f, "{} ", PIECE_REPR[c as usize][p as usize])?;
                 } else {
                     write!(f, "- ")?;

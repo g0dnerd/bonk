@@ -14,6 +14,15 @@ macro_rules! bb_impl_math_ops {
                 Self($trait::$fn(self.0, rhs.0))
             }
         }
+
+        impl $trait<Square> for Bitboard {
+            type Output = Self;
+
+            #[allow(clippy::suspicious_arithmetic_impl)]
+            fn $fn(self, rhs: Square) -> Self::Output {
+                Self($trait::$fn(self.0, 1 << rhs))
+            }
+        }
     )*};
 }
 
@@ -30,17 +39,7 @@ macro_rules! bb_impl_math_assign_ops {
                 $trait::$fn(&mut self.0, rhs.0)
             }
         }
-    )*};
-}
 
-bb_impl_math_assign_ops! {
-    BitAndAssign, bitand_assign;
-    BitOrAssign, bitor_assign;
-    BitXorAssign, bitxor_assign;
-}
-
-macro_rules! bb_impl_math_assign_ops_square {
-    ($($trait:ident,$fn:ident;)*) => {$(
         impl $trait<Square> for Bitboard {
             #[allow(clippy::suspicious_op_assign_impl)]
             fn $fn(&mut self, rhs: Square) {
@@ -50,7 +49,7 @@ macro_rules! bb_impl_math_assign_ops_square {
     )*};
 }
 
-bb_impl_math_assign_ops_square! {
+bb_impl_math_assign_ops! {
     BitAndAssign, bitand_assign;
     BitOrAssign, bitor_assign;
     BitXorAssign, bitxor_assign;
