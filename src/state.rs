@@ -17,6 +17,7 @@ pub struct GameState {
     fullmove_clock: usize,
     outgoing_attacks: [Bitboard; 64],
     incoming_attacks: [Bitboard; 64],
+    last_move: Option<Move>,
 }
 
 impl Default for GameState {
@@ -42,6 +43,7 @@ impl Default for GameState {
             fullmove_clock: 1,
             outgoing_attacks: DEFAULT_ATTACKS,
             incoming_attacks: DEFAULT_ATTACKED_BY,
+            last_move: None,
         }
     }
 }
@@ -49,6 +51,10 @@ impl Default for GameState {
 impl GameState {
     pub fn to_move(&self) -> Color {
         self.to_move
+    }
+
+    pub fn push_move(&mut self, m: Move) {
+        self.last_move = Some(m);
     }
 
     pub fn incoming_attacks(&self, s: Square) -> Bitboard {
@@ -356,6 +362,7 @@ impl GameState {
             fullmove_clock,
             outgoing_attacks: [Bitboard(0); 64],
             incoming_attacks: [Bitboard(0); 64],
+            last_move: None,
         };
 
         for s in 0..64 {
@@ -393,11 +400,30 @@ impl GameState {
     pub fn make_move(&mut self, m: Move, c: Color, p: Piece) {
         let start = m.start;
         let end = m.end;
-        // eprintln!("Making move {start:?} {end:?}");
 
         let mut is_promotion = false;
         let piece_to_capture = self.piece_at(end);
         let mut en_passant_target: Option<Square> = None;
+
+        // if piece_to_capture == Some(Piece::KING) {
+        //     let pieces = self.pieces_for_color(!c);
+        //     let king_mask = self.piece_bitboard(Piece::KING) & pieces;
+        //     let king_square = king_mask.trailing_zeros();
+        //     let in_check = is_square_attacked_by(self, king_square, !c);
+        //     eprintln!(
+        //         "About to capture king with move {} {} in position, in check on king square {}: {in_check}",
+        //         square_to_algebraic(start),
+        //         square_to_algebraic(end),
+        //         square_to_algebraic(king_square)
+        //     );
+        //     let last = self.last_move.unwrap();
+        //     eprintln!(
+        //         "Last move: {} {}",
+        //         square_to_algebraic(last.start),
+        //         square_to_algebraic(last.end)
+        //     );
+        //     eprintln!("{self}");
+        // }
 
         self.halfmove_clock += 1;
 

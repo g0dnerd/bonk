@@ -58,6 +58,7 @@ pub fn negamax(
         let mut new_state = *state;
         new_state.make_move(m, to_move, p);
 
+        new_state.push_move(m);
         let score = -negamax(&new_state, depth - 1, -beta, -alpha, tbl);
 
         max_score = max_score.max(score);

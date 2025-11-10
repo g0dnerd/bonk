@@ -6,17 +6,15 @@ use crate::{
     MagicTableEntry,
     Move,
     Piece,
-    ROOK_DIRECTIONS,
+    ROOK_DIRECTIONS, // util::square_to_algebraic,
     Square,
     Squares,
     between_squares,
     bitboard::Bitboard,
     movegen::moves::*,
     ray_between_inclusive,
-    ray_from_square,
     state::GameState,
     try_square_offset,
-    // util::square_to_algebraic,
 };
 
 pub mod magics;
@@ -301,7 +299,8 @@ pub fn moves_for_piece(state: &GameState, s: Square, c: Color, p: Piece) -> Bitb
 pub fn legal_moves(state: &GameState, c: Color) -> Vec<Move> {
     let mut moves: Vec<Move> = Vec::new();
     let pieces = state.pieces_for_color(c);
-    let king_square = (state.piece_bitboard(Piece::KING) & pieces).trailing_zeros();
+    let king_mask = state.piece_bitboard(Piece::KING) & pieces;
+    let king_square = king_mask.trailing_zeros();
 
     let in_check = is_square_attacked_by(state, king_square, !c);
 
@@ -424,33 +423,55 @@ fn pin_ray(state: &GameState, s: Square, king_square: Square, c: Color) -> Bitbo
         return Bitboard(0);
     }
 
-    let full_ray = ray_between_inclusive(king_square, s, direction);
-    let beyond = ray_from_square(s, direction) & !full_ray;
+    let king_file = king_square % 8;
+    let king_rank = king_square / 8;
+    let piece_file = s % 8;
+    let piece_rank = s / 8;
 
-    let enemy_sliders = match direction {
-        Direction::Horizontal | Direction::Vertical => {
-            (state.piece_bitboard(Piece::ROOK) | state.piece_bitboard(Piece::QUEEN))
-                & state.pieces_for_color(!c)
-        }
-        Direction::Diagonal | Direction::AntiDiagonal => {
-            (state.piece_bitboard(Piece::BISHOP) | state.piece_bitboard(Piece::QUEEN))
-                & state.pieces_for_color(!c)
-        }
-        Direction::None => return Bitboard(0),
+    let file_step = match piece_file.cmp(&king_file) {
+        std::cmp::Ordering::Greater => 1i8,
+        std::cmp::Ordering::Less => -1i8,
+        std::cmp::Ordering::Equal => 0i8,
     };
 
+    let rank_step = match piece_rank.cmp(&king_rank) {
+        std::cmp::Ordering::Greater => 1i8,
+        std::cmp::Ordering::Less => -1i8,
+        std::cmp::Ordering::Equal => 0i8,
+    };
+
+    // Step from piece_square in the direction away from king to find next piece
+    let mut current_rank = piece_rank as i8 + rank_step;
+    let mut current_file = piece_file as i8 + file_step;
+
     let mut next_piece_square = None;
-    for sq in beyond {
+    while (0..8).contains(&current_rank) && (0..8).contains(&current_file) {
+        let sq = (current_rank * 8 + current_file) as Square;
         if state.all_pieces().contains(sq) {
             next_piece_square = Some(sq);
             break;
         }
+        current_rank += rank_step;
+        current_file += file_step;
     }
 
-    if let Some(sq) = next_piece_square
-        && enemy_sliders.contains(sq)
-    {
-        return ray_between_inclusive(king_square, sq, direction);
+    // Check if that piece is an enemy slider of the right type
+    if let Some(sq) = next_piece_square {
+        let enemy_sliders = match direction {
+            Direction::Horizontal | Direction::Vertical => {
+                (state.piece_bitboard(Piece::ROOK) | state.piece_bitboard(Piece::QUEEN))
+                    & state.pieces_for_color(!c)
+            }
+            Direction::Diagonal | Direction::AntiDiagonal => {
+                (state.piece_bitboard(Piece::BISHOP) | state.piece_bitboard(Piece::QUEEN))
+                    & state.pieces_for_color(!c)
+            }
+            Direction::None => return Bitboard(0),
+        };
+
+        if enemy_sliders.contains(sq) {
+            return ray_between_inclusive(king_square, sq, direction);
+        }
     }
 
     Bitboard(0)
@@ -919,29 +940,26 @@ mod test {
     }
 
     #[test]
-    fn test_pin_ray() {
-        let fen = "rnbqk1nr/pppp1ppp/8/4p3/1b2P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
-        let state = GameState::from_fen(fen.into()).unwrap();
-        // let ray = pin_ray(&state, Squares::D2, Squares::E1, Color::WHITE);
-        // assert!(!is_legal_move(
-        //     &state,
-        //     Move {
-        //         start: Squares::D2,
-        //         end: Squares::D3
-        //     },
-        //     Color::WHITE,
-        //     Piece::PAWN,
-        //     Squares::E1
-        // ));
-        legal_moves(&state, Color::WHITE);
+    fn check_detection() {
+        let fen = String::from("rnb1kbnr/pppp1ppp/8/4p3/8/NP1P4/P1PQPPPP/R1q1KBNR w kq - 0 1");
+        let state = GameState::from_fen(fen).unwrap();
+
+        assert!(is_square_attacked_by(&state, Squares::E1, Color::BLACK));
+    }
+
+    #[test]
+    fn discovery_detection() {
+        let fen = String::from("rnb1kbnr/pppp1ppp/8/4p3/8/NP1P4/P1P1PPPP/R1qQKBNR w kq - 0 1");
+        let state = GameState::from_fen(fen).unwrap();
+
         assert!(!is_legal_move(
             &state,
             Move {
-                start: Squares::D2,
-                end: Squares::D4
+                start: Squares::D1,
+                end: Squares::D2
             },
             Color::WHITE,
-            Piece::PAWN,
+            Piece::QUEEN,
             Squares::E1
         ));
     }
