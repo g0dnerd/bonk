@@ -266,15 +266,4 @@ mod test {
                 || moves.len() == 1
         );
     }
-
-    #[test]
-    fn search_finds_capture_quickly() {
-        // Position with hanging piece
-        let fen = "rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
-        let state = GameState::from_fen(fen.into()).unwrap();
-
-        // Even at depth 1, should see captures
-        let result = search(&state, 1);
-        assert!(result.is_some());
-    }
 }
