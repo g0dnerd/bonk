@@ -52,7 +52,7 @@ fn display_legal_moves(moves: &[Move]) {
     println!();
 }
 
-fn get_piece_name(piece: &Piece) -> &str {
+fn get_piece_name(piece: Piece) -> &'static str {
     match piece {
         Piece::PAWN => "pawn",
         Piece::KNIGHT => "knight",
@@ -84,7 +84,7 @@ fn main() {
     let depth: u8 = depth_input.trim_end().parse().unwrap();
     assert!(depth <= 20);
 
-    let engine_color = *state.to_move();
+    let engine_color = state.to_move();
 
     loop {
         // Clear screen and show current position
@@ -108,8 +108,8 @@ fn main() {
             break;
         }
 
-        let current_color = *state.to_move();
-        let moves = legal_moves(&state, &current_color);
+        let current_color = state.to_move();
+        let moves = legal_moves(&state, current_color);
 
         if moves.is_empty() {
             println!("No legal moves!");
@@ -137,10 +137,10 @@ fn main() {
                 if let Some(user_move) = parse_move(input) {
                     if moves.contains(&user_move) {
                         let piece = state.piece_at(user_move.start).unwrap();
-                        state.make_move(&user_move, &!engine_color, &piece);
+                        state.make_move(user_move, !engine_color, piece);
                         println!(
                             "\nYou moved {} from {} to {}",
-                            get_piece_name(&piece),
+                            get_piece_name(piece),
                             square_to_algebraic(user_move.start),
                             square_to_algebraic(user_move.end)
                         );
@@ -160,13 +160,13 @@ fn main() {
                 let piece = state.piece_at(best_move.start).unwrap();
                 println!(
                     "\nEngine moved {} from {} to {} (score: {:.2})",
-                    get_piece_name(&piece),
+                    get_piece_name(piece),
                     square_to_algebraic(best_move.start),
                     square_to_algebraic(best_move.end),
                     score
                 );
 
-                state.make_move(&best_move, &engine_color, &piece);
+                state.make_move(best_move, engine_color, piece);
                 move_number += 1;
 
                 println!("\nPress Enter to continue...");

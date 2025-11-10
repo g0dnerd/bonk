@@ -1,6 +1,22 @@
 use crate::{
-    BISHOP_DIRECTIONS, Castling, Color, MagicTableEntry, Move, Piece, ROOK_DIRECTIONS, Square,
-    Squares, bitboard::Bitboard, movegen::moves::*, state::GameState, try_square_offset,
+    BISHOP_DIRECTIONS,
+    Castling,
+    Color,
+    Direction,
+    MagicTableEntry,
+    Move,
+    Piece,
+    ROOK_DIRECTIONS,
+    Square,
+    Squares,
+    between_squares,
+    bitboard::Bitboard,
+    movegen::moves::*,
+    ray_between_inclusive,
+    ray_from_square,
+    state::GameState,
+    try_square_offset,
+    // util::square_to_algebraic,
 };
 
 pub mod magics;
@@ -8,14 +24,14 @@ pub mod moves;
 
 pub const PAWN_ATTACKS: [[Bitboard; 8]; 2] = [
     [
-        Bitboard(0x20000),
-        Bitboard(0x50000),
-        Bitboard(0xA0000),
-        Bitboard(0x140000),
-        Bitboard(0x280000),
-        Bitboard(0x500000),
-        Bitboard(0xA00000),
-        Bitboard(0x400000),
+        Bitboard(0x200),
+        Bitboard(0x500),
+        Bitboard(0xA00),
+        Bitboard(0x1400),
+        Bitboard(0x2800),
+        Bitboard(0x5000),
+        Bitboard(0xA000),
+        Bitboard(0x4000),
     ],
     [
         Bitboard(0x2),
@@ -107,15 +123,24 @@ pub fn knight_moves(s: Square) -> Bitboard {
     KNIGHT_MOVES[s as usize]
 }
 
-pub fn pawn_attacks(s: Square, c: &Color) -> Bitboard {
+pub fn pawn_attacks(s: Square, c: Color) -> Bitboard {
     let file = (s % 8) as usize;
-    let rank = ((s / 8) as usize - 1).clamp(0, 5);
-    PAWN_ATTACKS[*c as usize][file] << (8 * rank)
+    let rank = (s / 8) as usize;
+    if (c == Color::WHITE && rank == 7) || (c == Color::BLACK && rank == 0) {
+        return Bitboard(0);
+    }
+
+    let rank_idx = match c {
+        Color::WHITE => rank,
+        Color::BLACK => rank - 1,
+    };
+
+    PAWN_ATTACKS[c as usize][file] << (8 * rank_idx)
 }
 
 // Possible pawn moves that do not check positional legality (e.g. whether or not your king would
 // be left in check after making a move).
-pub fn pawn_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
+pub fn pawn_moves(state: &GameState, s: Square, c: Color) -> Bitboard {
     let mut moves = Bitboard(0);
 
     let direction = match c {
@@ -129,7 +154,7 @@ pub fn pawn_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
     {
         moves |= offs;
         let rank = s / 8;
-        if (rank == 1 && c == &Color::WHITE) || (rank == 6 && c == &Color::BLACK) {
+        if (rank == 1 && c == Color::WHITE) || (rank == 6 && c == Color::BLACK) {
             let two_ahead = (s as i8 + 16 * direction) as u8;
             if state.is_square_empty(two_ahead) {
                 moves |= two_ahead;
@@ -152,7 +177,7 @@ pub fn pawn_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
     moves
 }
 
-pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
+pub fn king_moves(state: &GameState, s: Square, c: Color) -> Bitboard {
     let mut moves = Bitboard(0);
     for (dx, dy) in ROOK_DIRECTIONS {
         if let Some(offs) = try_square_offset(s, dx, dy) {
@@ -172,8 +197,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                 if castling_rights & Castling::WHITE_KINGSIDE != 0
                     && state.is_square_empty(Squares::F1)
                     && state.is_square_empty(Squares::G1)
-                    && state.pieces_for_color(&Color::WHITE).contains(Squares::H1)
-                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::H1)
+                    && state.pieces_for_color(Color::WHITE).contains(Squares::H1)
+                    && state.piece_bitboard(Piece::ROOK).contains(Squares::H1)
                 {
                     moves |= Squares::G1;
                 }
@@ -181,8 +206,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                     && state.is_square_empty(Squares::B1)
                     && state.is_square_empty(Squares::C1)
                     && state.is_square_empty(Squares::D1)
-                    && state.pieces_for_color(&Color::WHITE).contains(Squares::A1)
-                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::A1)
+                    && state.pieces_for_color(Color::WHITE).contains(Squares::A1)
+                    && state.piece_bitboard(Piece::ROOK).contains(Squares::A1)
                 {
                     moves |= Squares::C1;
                 }
@@ -192,8 +217,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                     && state.is_square_empty(Squares::F8)
                     && state.is_square_empty(Squares::G8)
                     && !state.is_square_empty(Squares::H8)
-                    && state.pieces_for_color(&Color::BLACK).contains(Squares::H8)
-                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::H8)
+                    && state.pieces_for_color(Color::BLACK).contains(Squares::H8)
+                    && state.piece_bitboard(Piece::ROOK).contains(Squares::H8)
                 {
                     moves |= Squares::G8;
                 }
@@ -201,8 +226,8 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
                     && state.is_square_empty(Squares::B8)
                     && state.is_square_empty(Squares::C8)
                     && state.is_square_empty(Squares::D8)
-                    && state.pieces_for_color(&Color::BLACK).contains(Squares::A8)
-                    && state.piece_bitboard(&Piece::ROOK).contains(Squares::A8)
+                    && state.pieces_for_color(Color::BLACK).contains(Squares::A8)
+                    && state.piece_bitboard(Piece::ROOK).contains(Squares::A8)
                 {
                     moves |= Squares::C8;
                 }
@@ -210,7 +235,7 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
         }
     }
 
-    let mut opp_king_mask = state.piece_bitboard(&Piece::KING) & state.pieces_for_color(&!c);
+    let mut opp_king_mask = state.piece_bitboard(Piece::KING) & state.pieces_for_color(!c);
     let opp_king_square = opp_king_mask.trailing_zeros();
     for (dx, dy) in ROOK_DIRECTIONS {
         if let Some(offs) = try_square_offset(opp_king_square, dx, dy) {
@@ -226,7 +251,7 @@ pub fn king_moves(state: &GameState, s: Square, c: &Color) -> Bitboard {
     moves & !opp_king_mask
 }
 
-pub fn blockers_from_position(state: &GameState, s: Square, p: &Piece) -> Bitboard {
+pub fn blockers_from_position(state: &GameState, s: Square, p: Piece) -> Bitboard {
     let blockers = match p {
         Piece::ROOK => Bitboard(ROOK_MAGICS[s as usize].mask),
         Piece::BISHOP => Bitboard(BISHOP_MAGICS[s as usize].mask),
@@ -237,7 +262,7 @@ pub fn blockers_from_position(state: &GameState, s: Square, p: &Piece) -> Bitboa
 }
 
 // Slider moves without positional legality computed from magics
-pub fn slider_moves(state: &GameState, s: Square, p: &Piece) -> Bitboard {
+pub fn slider_moves(state: &GameState, s: Square, p: Piece) -> Bitboard {
     let blockers = blockers_from_position(state, s, p);
 
     match p {
@@ -253,17 +278,17 @@ pub fn slider_moves(state: &GameState, s: Square, p: &Piece) -> Bitboard {
     }
 }
 
-pub fn pseudolegal_for_piece(state: &GameState, s: Square, c: &Color, p: &Piece) -> Bitboard {
+pub fn pseudolegal_for_piece(state: &GameState, s: Square, c: Color, p: Piece) -> Bitboard {
     match p {
         // Keep only pawn attacks that point to an opposing piece
-        Piece::PAWN => (pawn_attacks(s, c) & state.pieces_for_color(&!c)) | pawn_moves(state, s, c),
+        Piece::PAWN => (pawn_attacks(s, c) & state.pieces_for_color(!c)) | pawn_moves(state, s, c),
         Piece::KNIGHT => knight_moves(s),
         Piece::BISHOP | Piece::ROOK | Piece::QUEEN => slider_moves(state, s, p),
         Piece::KING => king_moves(state, s, c),
     }
 }
 
-pub fn moves_for_piece(state: &GameState, s: Square, c: &Color, p: &Piece) -> Bitboard {
+pub fn moves_for_piece(state: &GameState, s: Square, c: Color, p: Piece) -> Bitboard {
     let moves = pseudolegal_for_piece(state, s, c, p);
     moves & !state.pieces_for_color(c)
 }
@@ -273,29 +298,39 @@ pub fn moves_for_piece(state: &GameState, s: Square, c: &Color, p: &Piece) -> Bi
 // 2. Remove all moves that would leave the king in check
 // 3. ???
 // 4. Profit
-pub fn legal_moves(state: &GameState, c: &Color) -> Vec<Move> {
+pub fn legal_moves(state: &GameState, c: Color) -> Vec<Move> {
     let mut moves: Vec<Move> = Vec::new();
     let pieces = state.pieces_for_color(c);
+    let king_square = (state.piece_bitboard(Piece::KING) & pieces).trailing_zeros();
 
-    for s in pieces {
-        let p = state.piece_at(s).unwrap();
-        let piece_moves = moves_for_piece(state, s, c, &p);
-        for end in piece_moves {
-            let mut tmp_state = *state;
-            let candidate_move = Move { start: s, end };
+    let in_check = is_square_attacked_by(state, king_square, !c);
 
-            if end > 63 {
-                eprintln!("Out of bounds move for {p:?}: {s:?} to {end:?}");
-            }
-            tmp_state.make_move(&candidate_move, c, &p);
+    if in_check {
+        for s in pieces {
+            let p = state.piece_at(s).unwrap();
+            let piece_moves = moves_for_piece(state, s, c, p);
 
-            match &tmp_state.in_check() {
-                Some(checked) => {
-                    if checked != c {
-                        moves.push(candidate_move)
-                    }
+            for end in piece_moves {
+                let mut tmp_state = *state;
+                let candidate_move = Move { start: s, end };
+                tmp_state.make_move(candidate_move, c, p);
+
+                let new_king_square = if p == Piece::KING { end } else { king_square };
+
+                if !is_square_attacked_by(&tmp_state, new_king_square, !c) {
+                    moves.push(candidate_move);
                 }
-                None => {
+            }
+        }
+    } else {
+        for s in pieces {
+            let p = state.piece_at(s).unwrap();
+            let piece_moves = moves_for_piece(state, s, c, p);
+
+            for end in piece_moves {
+                let candidate_move = Move { start: s, end };
+
+                if is_legal_move(state, candidate_move, c, p, king_square) {
                     moves.push(candidate_move);
                 }
             }
@@ -303,6 +338,164 @@ pub fn legal_moves(state: &GameState, c: &Color) -> Vec<Move> {
     }
 
     moves
+}
+
+fn is_legal_move(state: &GameState, m: Move, c: Color, p: Piece, king_square: Square) -> bool {
+    // King moves: check if destination is attacked
+    if p == Piece::KING {
+        if m.start.abs_diff(m.end) == 2 {
+            let intermediate = (m.start + m.end) / 2;
+            if is_square_attacked_by(state, intermediate, !c) {
+                return false;
+            }
+        }
+        return !is_square_attacked_by(state, m.end, !c);
+    }
+
+    let pin_ray = pin_ray(state, m.start, king_square, c);
+    if !pin_ray.is_empty() && !pin_ray.contains(m.end) {
+        return false;
+    }
+
+    if p == Piece::PAWN && state.en_passant() == Some(m.end) {
+        return !en_passant_exposes_king(state, m, c, king_square);
+    }
+
+    true
+}
+
+pub fn is_square_attacked_by(state: &GameState, s: Square, by_color: Color) -> bool {
+    let attackers = state.pieces_for_color(by_color);
+
+    let pawn_attackers = pawn_attacks(s, !by_color) & state.piece_bitboard(Piece::PAWN) & attackers;
+    if !pawn_attackers.is_empty() {
+        return true;
+    }
+
+    let knight_attackers = knight_moves(s) & state.piece_bitboard(Piece::KNIGHT) & attackers;
+    if !knight_attackers.is_empty() {
+        return true;
+    }
+
+    let king_square = (state.piece_bitboard(Piece::KING) & attackers).trailing_zeros();
+    if s.abs_diff(king_square) <= 1 {
+        let file_diff = (s % 8).abs_diff(king_square % 8);
+        let rank_diff = (s / 8).abs_diff(king_square / 8);
+        if file_diff <= 1 && rank_diff <= 1 {
+            return true;
+        }
+    }
+
+    // Check slider attacks (bishops, rooks, queens)
+    let bishop_attacks = slider_moves(state, s, Piece::BISHOP);
+    let bishop_attackers = bishop_attacks
+        & (state.piece_bitboard(Piece::BISHOP) | state.piece_bitboard(Piece::QUEEN))
+        & attackers;
+    if !bishop_attackers.is_empty() {
+        return true;
+    }
+
+    let rook_attacks = slider_moves(state, s, Piece::ROOK);
+    let rook_attackers = rook_attacks
+        & (state.piece_bitboard(Piece::ROOK) | state.piece_bitboard(Piece::QUEEN))
+        & attackers;
+    if !rook_attackers.is_empty() {
+        return true;
+    }
+
+    false
+}
+
+// Check if there's a slider attacking both the king and this piece
+// If so, return the ray between them
+fn pin_ray(state: &GameState, s: Square, king_square: Square, c: Color) -> Bitboard {
+    if s == king_square {
+        return Bitboard(0);
+    }
+
+    let direction = Direction::from_squares(king_square, s);
+
+    if direction == Direction::None {
+        return Bitboard(0);
+    }
+
+    let between = between_squares(king_square, s);
+    if !(between & state.all_pieces()).is_empty() {
+        return Bitboard(0);
+    }
+
+    let full_ray = ray_between_inclusive(king_square, s, direction);
+    let beyond = ray_from_square(s, direction) & !full_ray;
+
+    let enemy_sliders = match direction {
+        Direction::Horizontal | Direction::Vertical => {
+            (state.piece_bitboard(Piece::ROOK) | state.piece_bitboard(Piece::QUEEN))
+                & state.pieces_for_color(!c)
+        }
+        Direction::Diagonal | Direction::AntiDiagonal => {
+            (state.piece_bitboard(Piece::BISHOP) | state.piece_bitboard(Piece::QUEEN))
+                & state.pieces_for_color(!c)
+        }
+        Direction::None => return Bitboard(0),
+    };
+
+    let mut next_piece_square = None;
+    for sq in beyond {
+        if state.all_pieces().contains(sq) {
+            next_piece_square = Some(sq);
+            break;
+        }
+    }
+
+    if let Some(sq) = next_piece_square
+        && enemy_sliders.contains(sq)
+    {
+        return ray_between_inclusive(king_square, sq, direction);
+    }
+
+    Bitboard(0)
+}
+
+fn en_passant_exposes_king(state: &GameState, m: Move, c: Color, king_square: Square) -> bool {
+    // En passant is special: we remove TWO pawns from the rank
+    // This could expose the king to a horizontal rook/queen attack
+
+    let king_rank = king_square / 8;
+    let move_rank = m.start / 8;
+
+    // Only matters if king and moving pawn are on the same rank
+    if king_rank != move_rank {
+        return false;
+    }
+
+    let captured_pawn_square = if c == Color::WHITE {
+        m.end - 8
+    } else {
+        m.end + 8
+    };
+
+    // Temporarily remove both pawns and check for attacks
+    let all_pieces = state.all_pieces()
+        & !Bitboard::from_square(m.start)
+        & !Bitboard::from_square(captured_pawn_square);
+
+    // Check for enemy rooks/queens on the same rank
+    let enemy_pieces = state.pieces_for_color(!c);
+    let enemy_rooks_queens =
+        (state.piece_bitboard(Piece::ROOK) | state.piece_bitboard(Piece::QUEEN)) & enemy_pieces;
+
+    // Check horizontal attacks on the king's rank
+    for sq in enemy_rooks_queens {
+        if sq / 8 == king_rank {
+            // Check if there's a clear path between attacker and king
+            let between = between_squares(sq, king_square);
+            if (between & all_pieces).is_empty() {
+                return true; // Exposed to check!
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -317,11 +510,11 @@ mod test {
     fn pawn_moves_from_default() {
         let game = GameState::default();
         {
-            let moves = pawn_moves(&game, Squares::E2, &Color::WHITE);
+            let moves = pawn_moves(&game, Squares::E2, Color::WHITE);
             assert_eq!(moves, Bitboard(0x10100000));
         }
         {
-            let moves = pawn_moves(&game, Squares::E7, &Color::BLACK);
+            let moves = pawn_moves(&game, Squares::E7, Color::BLACK);
             assert_eq!(moves, Bitboard(0x101000000000));
         }
     }
@@ -330,11 +523,11 @@ mod test {
     fn king_moves_from_default() {
         let game = GameState::default();
         {
-            let moves = moves_for_piece(&game, Squares::E1, &Color::WHITE, &Piece::KING);
+            let moves = moves_for_piece(&game, Squares::E1, Color::WHITE, Piece::KING);
             assert_eq!(moves, Bitboard(0));
         }
         {
-            let moves = moves_for_piece(&game, Squares::E8, &Color::BLACK, &Piece::KING);
+            let moves = moves_for_piece(&game, Squares::E8, Color::BLACK, Piece::KING);
             assert_eq!(moves, Bitboard(0));
         }
     }
@@ -346,38 +539,38 @@ mod test {
         moves.push(moves_for_piece(
             &game,
             Squares::C1,
-            &Color::WHITE,
-            &Piece::BISHOP,
+            Color::WHITE,
+            Piece::BISHOP,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::C8,
-            &Color::BLACK,
-            &Piece::BISHOP,
+            Color::BLACK,
+            Piece::BISHOP,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::H1,
-            &Color::WHITE,
-            &Piece::ROOK,
+            Color::WHITE,
+            Piece::ROOK,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::H8,
-            &Color::BLACK,
-            &Piece::ROOK,
+            Color::BLACK,
+            Piece::ROOK,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::D1,
-            &Color::WHITE,
-            &Piece::QUEEN,
+            Color::WHITE,
+            Piece::QUEEN,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::D8,
-            &Color::BLACK,
-            &Piece::QUEEN,
+            Color::BLACK,
+            Piece::QUEEN,
         ));
 
         for m in moves {
@@ -391,38 +584,38 @@ mod test {
         let fen = "rnbqkbnr/2pppppp/1p6/p7/4P2P/8/PPPP1PP1/RNBQKBNR w KQkq - 0 3";
         let game = GameState::from_fen(fen.into()).unwrap();
 
-        let moves_white_queen = moves_for_piece(&game, Squares::D1, &Color::WHITE, &Piece::QUEEN);
+        let moves_white_queen = moves_for_piece(&game, Squares::D1, Color::WHITE, Piece::QUEEN);
         assert_eq!(moves_white_queen, Bitboard(0x8040201000));
 
         let moves_white_bishop_c1 =
-            moves_for_piece(&game, Squares::C1, &Color::WHITE, &Piece::BISHOP);
+            moves_for_piece(&game, Squares::C1, Color::WHITE, Piece::BISHOP);
         assert_eq!(moves_white_bishop_c1, Bitboard(0));
 
         let moves_white_bishop_f1 =
-            moves_for_piece(&game, Squares::F1, &Color::WHITE, &Piece::BISHOP);
+            moves_for_piece(&game, Squares::F1, Color::WHITE, Piece::BISHOP);
         assert_eq!(moves_white_bishop_f1, Bitboard(0x10204081000));
 
-        let moves_white_rook_a1 = moves_for_piece(&game, Squares::A1, &Color::WHITE, &Piece::ROOK);
+        let moves_white_rook_a1 = moves_for_piece(&game, Squares::A1, Color::WHITE, Piece::ROOK);
         assert_eq!(moves_white_rook_a1, Bitboard(0));
 
-        let moves_white_rook_h1 = moves_for_piece(&game, Squares::H1, &Color::WHITE, &Piece::ROOK);
+        let moves_white_rook_h1 = moves_for_piece(&game, Squares::H1, Color::WHITE, Piece::ROOK);
         assert_eq!(moves_white_rook_h1, Bitboard(0x808000));
 
-        let moves_black_queen = moves_for_piece(&game, Squares::D8, &Color::BLACK, &Piece::QUEEN);
+        let moves_black_queen = moves_for_piece(&game, Squares::D8, Color::BLACK, Piece::QUEEN);
         assert_eq!(moves_black_queen, Bitboard(0));
 
         let moves_black_bishop_c8 =
-            moves_for_piece(&game, Squares::C8, &Color::BLACK, &Piece::BISHOP);
+            moves_for_piece(&game, Squares::C8, Color::BLACK, Piece::BISHOP);
         assert_eq!(moves_black_bishop_c8, Bitboard(0x2010000000000));
 
         let moves_black_bishop_f8 =
-            moves_for_piece(&game, Squares::F8, &Color::BLACK, &Piece::BISHOP);
+            moves_for_piece(&game, Squares::F8, Color::BLACK, Piece::BISHOP);
         assert_eq!(moves_black_bishop_f8, Bitboard(0));
 
-        let moves_black_rook_a8 = moves_for_piece(&game, Squares::A8, &Color::BLACK, &Piece::ROOK);
+        let moves_black_rook_a8 = moves_for_piece(&game, Squares::A8, Color::BLACK, Piece::ROOK);
         assert_eq!(moves_black_rook_a8, Bitboard(0x1010000000000));
 
-        let moves_black_rook_h8 = moves_for_piece(&game, Squares::H8, &Color::BLACK, &Piece::ROOK);
+        let moves_black_rook_h8 = moves_for_piece(&game, Squares::H8, Color::BLACK, Piece::ROOK);
         assert_eq!(moves_black_rook_h8, Bitboard(0));
     }
 
@@ -435,26 +628,26 @@ mod test {
         moves.push(moves_for_piece(
             &game,
             Squares::B1,
-            &Color::WHITE,
-            &Piece::KNIGHT,
+            Color::WHITE,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::G1,
-            &Color::WHITE,
-            &Piece::KNIGHT,
+            Color::WHITE,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::B8,
-            &Color::BLACK,
-            &Piece::KNIGHT,
+            Color::BLACK,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::G8,
-            &Color::BLACK,
-            &Piece::KNIGHT,
+            Color::BLACK,
+            Piece::KNIGHT,
         ));
 
         for (m, e) in moves.into_iter().zip(expected) {
@@ -473,26 +666,26 @@ mod test {
         moves.push(moves_for_piece(
             &game,
             Squares::D2,
-            &Color::WHITE,
-            &Piece::KNIGHT,
+            Color::WHITE,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::F3,
-            &Color::WHITE,
-            &Piece::KNIGHT,
+            Color::WHITE,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::D4,
-            &Color::BLACK,
-            &Piece::KNIGHT,
+            Color::BLACK,
+            Piece::KNIGHT,
         ));
         moves.push(moves_for_piece(
             &game,
             Squares::H6,
-            &Color::BLACK,
-            &Piece::KNIGHT,
+            Color::BLACK,
+            Piece::KNIGHT,
         ));
 
         for (m, e) in moves.into_iter().zip(expected) {
@@ -584,10 +777,52 @@ mod test {
     }
 
     #[test]
+    fn test_pawn_attacks() {
+        for s in 0..64 {
+            for &c in &[Color::WHITE, Color::BLACK] {
+                let rank = s / 8;
+                let file = s % 8;
+                let expected = match c {
+                    Color::WHITE => {
+                        if rank == 7 {
+                            Bitboard(0)
+                        } else {
+                            match file {
+                                0 => Bitboard(0) | (((rank + 1) * 8) + file + 1),
+                                7 => Bitboard(0) | (((rank + 1) * 8) + file - 1),
+                                _ => {
+                                    (Bitboard(0) | (((rank + 1) * 8) + file + 1))
+                                        | (((rank + 1) * 8) + file - 1)
+                                }
+                            }
+                        }
+                    }
+                    Color::BLACK => {
+                        if rank == 0 {
+                            Bitboard(0)
+                        } else {
+                            match file {
+                                0 => Bitboard(0) | (((rank - 1) * 8) + file + 1),
+                                7 => Bitboard(0) | (((rank - 1) * 8) + file - 1),
+                                _ => {
+                                    (Bitboard(0) | (((rank - 1) * 8) + file + 1))
+                                        | (((rank - 1) * 8) + file - 1)
+                                }
+                            }
+                        }
+                    }
+                };
+                let pawn_atx = pawn_attacks(s, c);
+                assert_eq!(pawn_atx, expected);
+            }
+        }
+    }
+
+    #[test]
     fn legal_moves_no_discovered_check() {
         let fen = "rnbqk1nr/pppp1ppp/8/4p3/1b2P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
         let state = GameState::from_fen(fen.into()).unwrap();
-        let moves = legal_moves(&state, &Color::WHITE);
+        let moves = legal_moves(&state, Color::WHITE);
 
         assert!(moves.iter().all(|m| m.start != Squares::D2));
     }
@@ -596,7 +831,7 @@ mod test {
     fn legal_moves_cannot_move_into_check() {
         let fen = "rn1qkbnr/ppp1pppp/8/3p4/3PP1b1/8/PPP2PPP/RNBQKBNR w KQkq - 1 3";
         let state = GameState::from_fen(fen.into()).unwrap();
-        let moves = legal_moves(&state, &Color::WHITE);
+        let moves = legal_moves(&state, Color::WHITE);
 
         assert!(!moves.contains(&mv!(E1, E2)));
     }
@@ -681,5 +916,33 @@ mod test {
         let moves = legal_moves(&state, state.to_move());
 
         assert!(moves.contains(&mv!(E5, D6)));
+    }
+
+    #[test]
+    fn test_pin_ray() {
+        let fen = "rnbqk1nr/pppp1ppp/8/4p3/1b2P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+        let state = GameState::from_fen(fen.into()).unwrap();
+        // let ray = pin_ray(&state, Squares::D2, Squares::E1, Color::WHITE);
+        // assert!(!is_legal_move(
+        //     &state,
+        //     Move {
+        //         start: Squares::D2,
+        //         end: Squares::D3
+        //     },
+        //     Color::WHITE,
+        //     Piece::PAWN,
+        //     Squares::E1
+        // ));
+        legal_moves(&state, Color::WHITE);
+        assert!(!is_legal_move(
+            &state,
+            Move {
+                start: Squares::D2,
+                end: Squares::D4
+            },
+            Color::WHITE,
+            Piece::PAWN,
+            Squares::E1
+        ));
     }
 }

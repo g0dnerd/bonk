@@ -50,13 +50,13 @@ impl std::ops::Not for Color {
     }
 }
 
-impl std::ops::Not for &Color {
-    type Output = Color;
+impl<'a> std::ops::Not for &'a Color {
+    type Output = &'a Color;
 
     fn not(self) -> Self::Output {
         match self {
-            Color::WHITE => Color::BLACK,
-            Color::BLACK => Color::WHITE,
+            Color::WHITE => &Color::BLACK,
+            Color::BLACK => &Color::WHITE,
         }
     }
 }
@@ -201,6 +201,179 @@ pub type SliderDirections = [(i8, i8); 4];
 
 pub const ROOK_DIRECTIONS: SliderDirections = [(0, 1), (1, 0), (0, -1), (-1, 0)];
 pub const BISHOP_DIRECTIONS: SliderDirections = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Direction {
+    Horizontal,
+    Vertical,
+    Diagonal,
+    AntiDiagonal,
+    None,
+}
+
+impl Direction {
+    pub fn from_squares(from: Square, to: Square) -> Self {
+        let from_file = from % 8;
+        let from_rank = from / 8;
+        let to_file = to % 8;
+        let to_rank = to / 8;
+
+        if from_rank == to_rank {
+            Direction::Horizontal
+        } else if from_file == to_file {
+            Direction::Vertical
+        } else if from_rank.abs_diff(to_rank) == from_file.abs_diff(to_file) {
+            let rank_diff = to_rank as i8 - from_rank as i8;
+            let file_diff = to_file as i8 - from_file as i8;
+
+            if rank_diff.signum() == file_diff.signum() {
+                Direction::Diagonal
+            } else {
+                Direction::AntiDiagonal
+            }
+        } else {
+            Direction::None
+        }
+    }
+}
+
+pub fn ray_from_square(s: Square, d: Direction) -> Bitboard {
+    let file = s % 8;
+    let rank = s / 8;
+    let mut ray = Bitboard(0);
+
+    match d {
+        Direction::Horizontal => {
+            for f in 0..8 {
+                if f != file {
+                    ray |= rank * 8 + f;
+                }
+            }
+        }
+        Direction::Vertical => {
+            for r in 0..8 {
+                if r != rank {
+                    ray |= r * 8 + file;
+                }
+            }
+        }
+        Direction::Diagonal => {
+            let mut r = rank as i8;
+            let mut f = file as i8;
+
+            loop {
+                r += 1;
+                f += 1;
+                if r >= 8 || f >= 8 {
+                    break;
+                }
+
+                ray |= (r * 8 + f) as Square;
+            }
+
+            r = rank as i8;
+            f = file as i8;
+            loop {
+                r -= 1;
+                f -= 1;
+                if r < 0 || f < 0 {
+                    break;
+                }
+                ray |= (r * 8 + f) as Square;
+            }
+        }
+        Direction::AntiDiagonal => {
+            let mut r = rank as i8;
+            let mut f = file as i8;
+
+            loop {
+                r += 1;
+                f -= 1;
+                if r >= 8 || f < 0 {
+                    break;
+                }
+
+                let to_add = (r * 8 + f) as Square;
+                ray |= to_add;
+            }
+
+            r = rank as i8;
+            f = file as i8;
+
+            loop {
+                r -= 1;
+                f += 1;
+                if r < 0 || f >= 8 {
+                    break;
+                }
+                ray |= (r * 8 + f) as Square;
+            }
+        }
+
+        Direction::None => {}
+    }
+
+    ray
+}
+
+pub fn ray_between_inclusive(from: Square, to: Square, d: Direction) -> Bitboard {
+    let from_file = from % 8;
+    let from_rank = from / 8;
+    let to_file = to % 8;
+    let to_rank = to / 8;
+
+    let mut ray = Bitboard(0);
+
+    match d {
+        Direction::Horizontal => {
+            let min_file = from_file.min(to_file);
+            let max_file = from_file.max(to_file);
+            for f in min_file..=max_file {
+                ray |= from_rank * 8 + f;
+            }
+        }
+        Direction::Vertical => {
+            let min_rank = from_rank.min(to_rank);
+            let max_rank = from_rank.max(to_rank);
+            for r in min_rank..=max_rank {
+                ray |= r * 8 + from_file;
+            }
+        }
+        Direction::Diagonal | Direction::AntiDiagonal => {
+            let rank_step = if to_rank > from_rank { 1i8 } else { -1i8 };
+            let file_step = if to_file > from_file { 1i8 } else { -1i8 };
+
+            let mut r = from_rank as i8;
+            let mut f = from_file as i8;
+
+            loop {
+                ray |= (r * 8 + f) as Square;
+                if r == to_rank as i8 && f == to_file as i8 {
+                    break;
+                }
+                r += rank_step;
+                f += file_step;
+            }
+        }
+        Direction::None => {}
+    }
+
+    ray
+}
+
+pub fn between_squares(from: Square, to: Square) -> Bitboard {
+    if from == to {
+        return Bitboard(0);
+    }
+
+    let direction = Direction::from_squares(from, to);
+    if direction == Direction::None {
+        return Bitboard(0);
+    }
+
+    let ray = ray_between_inclusive(from, to, direction);
+    ray & !Bitboard::from_square(from) & !Bitboard::from_square(to)
+}
 
 pub struct MagicTableEntry {
     pub mask: u64,
@@ -381,12 +554,12 @@ pub mod util {
 
         (@final $state:expr, $s:ident, $e:ident, $c:ident, $p:ident) => {
             $state.make_move(
-                &Move {
+                Move {
                     start: Squares::$s,
                     end: Squares::$e,
                 },
-                &Color::$c,
-                &Piece::$p,
+                Color::$c,
+                Piece::$p,
             )
         };
     }

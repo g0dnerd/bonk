@@ -2,9 +2,9 @@ use core::f32;
 use std::collections::HashMap;
 
 use crate::{
-    GameResult, Move,
+    GameResult, Move, Piece,
     evaluation::{evaluate, order_moves},
-    movegen::legal_moves,
+    movegen::{is_square_attacked_by, legal_moves},
     state::GameState,
 };
 
@@ -36,7 +36,7 @@ pub fn negamax(
     let mut moves = legal_moves(state, to_move);
 
     if moves.is_empty() {
-        if state.in_check() == Some(*to_move) {
+        if state.in_check() == Some(to_move) {
             return -CHECKMATE_SCORE;
         } else {
             // Stalemate
@@ -56,7 +56,7 @@ pub fn negamax(
     for m in moves {
         let p = state.piece_at(m.start).unwrap();
         let mut new_state = *state;
-        new_state.make_move(&m, to_move, &p);
+        new_state.make_move(m, to_move, p);
 
         let score = -negamax(&new_state, depth - 1, -beta, -alpha, tbl);
 
@@ -103,17 +103,17 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
     let mut best_move = moves[0];
     let mut best_score = f32::NEG_INFINITY;
 
-    for m in &moves {
+    for m in moves {
         let p = state.piece_at(m.start).unwrap();
         let mut new_state = *state;
-        new_state.make_move(m, to_move, &p);
+        new_state.make_move(m, to_move, p);
 
         // Take mate in 1
         if let Some(r) = is_game_over(&new_state)
             && r == GameResult::Checkmate(!new_state.to_move())
         {
             best_score = CHECKMATE_SCORE;
-            best_move = *m;
+            best_move = m;
             break;
         }
 
@@ -127,7 +127,7 @@ pub fn search(state: &GameState, depth: u8) -> Option<(Move, f32)> {
 
         if score > best_score {
             best_score = score;
-            best_move = *m;
+            best_move = m;
         }
     }
 
@@ -139,7 +139,9 @@ pub fn is_game_over(state: &GameState) -> Option<GameResult> {
     let moves = legal_moves(state, to_move);
 
     if moves.is_empty() {
-        if state.in_check() == Some(*to_move) {
+        let king_square =
+            (state.piece_bitboard(Piece::KING) & state.pieces_for_color(to_move)).trailing_zeros();
+        if is_square_attacked_by(state, king_square, !to_move) {
             return Some(GameResult::Checkmate(!to_move));
         } else {
             return Some(GameResult::Stalemate);
@@ -222,8 +224,8 @@ mod test {
         let fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
         let state = GameState::from_fen(fen.into()).unwrap();
 
-        let mut moves = legal_moves(&state, &Color::WHITE);
-        order_moves(&state, &mut moves, &Color::WHITE);
+        let mut moves = legal_moves(&state, Color::WHITE);
+        order_moves(&state, &mut moves, Color::WHITE);
 
         // The first few moves should include captures if available
         // Bxf7+ is a check and capture, should be very high priority
@@ -249,10 +251,10 @@ mod test {
         let fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 2";
         let state = GameState::from_fen(fen.into()).unwrap();
 
-        let mut moves = legal_moves(&state, &Color::WHITE);
+        let mut moves = legal_moves(&state, Color::WHITE);
         let original_first = moves[0];
 
-        order_moves(&state, &mut moves, &Color::WHITE);
+        order_moves(&state, &mut moves, Color::WHITE);
 
         // After ordering, if there are checking moves, they should be early
         // The ordering might change the first move if there are tactical moves
